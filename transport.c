@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <arpa/inet.h>
+#include <time.h>
 #include "mysock.h"
 #include "stcp_api.h"
 #include "transport.h"
@@ -38,7 +39,13 @@ typedef struct
 
 static void generate_initial_seq_num(context_t *ctx);
 static void control_loop(mysocket_t sd, context_t *ctx);
+void randomNum(context_t* ctx);
 
+void randomNum(context_t *ctx)
+{
+    srand(time(0));
+    ctx->initial_sequence_num = rand() % 256;
+}
 
 /* initialise the transport layer, and start the main loop, handling
  * any data from the peer or the application.  this function should not
