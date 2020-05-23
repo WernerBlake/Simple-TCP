@@ -22,7 +22,7 @@
 #include "transport.h"
 
 
-enum { CSTATE_ESTABLISHED, SYN_SEND };    /* you should have more states */
+enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN };    /* you should have more states */
 const int SIZE = 536; //maximum segment size
 const long WINDOWLENGTH = 3072;
 /* this structure is global to a mysocket descriptor */
@@ -100,7 +100,28 @@ void transport_init(mysocket_t sd, bool_t is_active)
        pack->hdr.th_win = htonl(WINDOWLENGTH);
        stcp_network_send(sd, (void *) pack, sizeof(packet),NULL);
      }
+     //not active and must listen
+     else
+     {
+       ctx->connection_state = LISTEN;
+       stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
 
+       stcp_app_recv(sd, (void *) pack, sizeof(packet));
+       ctx->connection_state = SYN_RECV;
+
+       if(pack->hdr.flags & TH_SYN)
+       {
+         pack->hdr.th_ack = pack->hdr.th_seq + 1;
+         pack->hdr.th_seq = ctx->initial_sequence_num;
+         pack->hdr.th_flags = TH_ACK|TH_SYN;
+         pack->hdr.th_win = htonl(WINDOWLENGTH);
+         stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
+
+         //wait for response
+         stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+         stcp_app_recv(sd, (void *) pack, sizeof(packet));
+       }
+     }
     ctx->connection_state = CSTATE_ESTABLISHED;
     stcp_unblock_application(sd);
 
