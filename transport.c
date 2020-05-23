@@ -21,9 +21,9 @@
 #include "transport.h"
 
 
-enum { CSTATE_ESTABLISHED };    /* you should have more states */
-
-
+enum { CSTATE_ESTABLISHED, SYN_SEND };    /* you should have more states */
+const int SIZE = 536; //maximum segment size
+const long WINDOWLENGTH = 3072;
 /* this structure is global to a mysocket descriptor */
 typedef struct
 {
@@ -35,10 +35,14 @@ typedef struct
     /* any other connection-wide global variables go here */
 } context_t;
 
+typedef struct
+{
+    tcphdr hdr;
+    char buff[SIZE];
+} packet;
 
 static void generate_initial_seq_num(context_t *ctx);
 static void control_loop(mysocket_t sd, context_t *ctx);
-
 
 /* initialise the transport layer, and start the main loop, handling
  * any data from the peer or the application.  this function should not
@@ -47,12 +51,15 @@ static void control_loop(mysocket_t sd, context_t *ctx);
 void transport_init(mysocket_t sd, bool_t is_active)
 {
     context_t *ctx;
+    packet *pack;
 
     ctx = (context_t *) calloc(1, sizeof(context_t));
     assert(ctx);
 
     generate_initial_seq_num(ctx);
 
+    pack = (packet *) calloc(1, sizeof(packet));
+    assert(pack);
     /* XXX: you should send a SYN packet here if is_active, or wait for one
      * to arrive if !is_active.  after the handshake completes, unblock the
      * application with stcp_unblock_application(sd).  you may also use
@@ -60,6 +67,32 @@ void transport_init(mysocket_t sd, bool_t is_active)
      * if connection fails; to do so, just set errno appropriately (e.g. to
      * ECONNREFUSED, etc.) before calling the function.
      */
+
+     if(is_active){
+       //build SYN packet and send it
+       pack->hdr.th_seq = ctx->initial_sequence_num;
+       pack->hdr.th_ack = NULL;
+       pack->hdr.th_flags = TH_SYN;
+       pack->hdr.th_win = htonl(WINDOWLENGTH);
+       stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
+
+       ctx->connection_state = SYN_SEND;
+
+       //wait for acknowledgement
+       tcp_seq ack_expected = pack->hdr.th_seq+1;
+       stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+
+       //recieved acknowledgement
+       stcp_network_recv(sd, (void *) pack, sizeof(packet));
+
+       //build acknowledgement packet and send it
+       pack->hdr.th_seq = pack->hdr.th_seq;
+       pack->hdr.th_ack = pack->hdr.th_seq + 1;
+       pack->hdr.th_flags = TH_ACK;
+       pack->hdr.th_win = htonl(WINDOWLENGTH);
+       stcp_network_send(sd, (void *) pack, sizeof(packet),NULL);
+     }
+
     ctx->connection_state = CSTATE_ESTABLISHED;
     stcp_unblock_application(sd);
 
