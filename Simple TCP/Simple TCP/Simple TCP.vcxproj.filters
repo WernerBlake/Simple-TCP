@@ -78,4 +78,9 @@
       <Filter>Header</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\ENVCFG.MK" />
+    <None Include="..\..\Makefile" />
+    <None Include="..\..\README" />
+  </ItemGroup>
 </Project>
