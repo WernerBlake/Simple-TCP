@@ -34,7 +34,7 @@
         #error huh?  Linux has not defined endianness.
     #endif
 #else
-    #error Unrecognised system type.
+  #error Unrecognised system type.
 #endif
 
 typedef uint32_t tcp_seq;

@@ -17,24 +17,15 @@
 #include <assert.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <stdbool.h>
 #include "mysock.h"
 #include "stcp_api.h"
 #include "transport.h"
 
-
-enum { CSTATE_ESTABLISHED, 
-       SYN_SEND, 
-       SYN_RECV, 
-       LISTEN
-       FIN_WAIT1
-       FIN_WAIT2
-       TIME_WAIT
-       LAST_ACK
-       CSTATE_CLOSED
-     }; 
-        /* you should have more states */
+enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN, CSTATE_CLOSED, FIN_SENT };    /* you should have more states */
 const int SIZE = 536; //maximum segment size
 const long WINDOWLENGTH = 3072;
+
 /* this structure is global to a mysocket descriptor */
 typedef struct
 {
@@ -42,56 +33,26 @@ typedef struct
 
     int connection_state;   /* state of the connection (established, etc.) */
     tcp_seq initial_sequence_num;
-    cir_buffer recv_buffer;
-    cir_buffer send_buffer;
 
-
+    unsigned int sequence_num;      // next sequence number to send
+    unsigned int rec_sequence_num;  // next wanted sequence number
+    unsigned int rec_window_size;
     /* any other connection-wide global variables go here */
 } context_t;
 
 typedef struct
 {
-    tcphdr hdr;
+    STCPHeader hdr;
     char buff[SIZE];
 } packet;
-
-typedef struct
-{
-    char* buffer;
-    size_t head;
-    size_t tail;
-    size_t size;
-    size_t datasize;
-    size_t freesize;
-    
-}cir_buffer;
 
 static void generate_initial_seq_num(context_t *ctx);
 static void control_loop(mysocket_t sd, context_t *ctx);
 
-static void buffer_init(cir_buffer *buff, size_t initial_sequence_num){
-    buff->buffer = (char*)malloc(WINDOWLENGTH*sizeof(char));
-    buff->head = initial_sequence_num;
-    buff->tail = buff->head;
-    buff->size = WINDOWLENGTH;
-    buff->datasize = 0;
-    buff->freesize = WINDOWLENGTH;
-}
+bool sendACK(mysocket_t sd, context_t* ctx);
+packet* createACK(unsigned int seq, unsigned int ack);
+packet* createFIN(unsigned int seq, unsigned int ack);
 
-static size_t write_buffer(cir_buffer *buff, char *data, size_t datasize){
-    size_t start = buff->head % buff->size;
-    if (datasize <= (buff->size - start))
-        memcpy(buf->buffer+start, data, datasize);
-    else{
-        size_t segment_size = buff->size - start;
-        memcpy(buff->buffer+start, data, segment_size);
-        memcpy(buff->buffer, data+segment_size, datasize-segment_size);
-    }
-    buff->head += datasize;
-    buff->freesize -= datasize;
-    buff->datasize += datasize;
-    return datasize;
-}
 /* initialise the transport layer, and start the main loop, handling
  * any data from the peer or the application.  this function should not
  * return until the connection is closed.
@@ -118,8 +79,9 @@ void transport_init(mysocket_t sd, bool_t is_active)
 
      if(is_active){
        //build SYN packet and send it
-       pack->hdr.th_seq = htonl(ctx->initial_sequence_num);
-       pack->hdr.th_ack = NULL;
+
+       pack->hdr.th_seq = ctx->initial_sequence_num;
+       //pack->hdr.th_ack = "\0";
        pack->hdr.th_flags = TH_SYN;
        pack->hdr.th_win = htons(WINDOWLENGTH);
        stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
@@ -244,22 +206,132 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         }
         if (event & NETWORK_DATA)
         {
+            char payload[SIZE];
 
+            ssize_t network_bytes = stcp_network_recv(sd, payload, SIZE);
+            if (network_bytes < sizeof(STCPHeader))
+            {
+                free(ctx);
+                continue;
+            }
+
+            STCPHeader* payloadHeader = (STCPHeader*)payload;
+            ctx->rec_sequence_num = ntohl(payloadHeader->th_seq);
+            ctx->rec_window_size = ntohs(payloadHeader->th_win);
+
+            if (payloadHeader->th_flags == TH_FIN)
+            {
+                sendACK(sd, ctx);
+                stcp_fin_received(sd);
+                ctx->connection_state = CSTATE_CLOSED;
+                continue;
+            }
+
+            if (network_bytes - sizeof(STCPHeader) != 0)
+            {
+                stcp_app_sent(sd, payload + sizeof(STCPHeader), network_bytes - sizeof(STCPHeader));
+                sendACK(sd, ctx);
+            }
         }
 
         if (event & APP_CLOSE_REQUESTED)
         {
+            if (ctx->connection_state == CSTATE_ESTABLISHED)
+            {
+                packet* FIN_packet = createFIN(ctx->sequence_num, ctx->rec_sequence_num + 1);
+                ctx->sequence_num++;
 
-        }
-    end:
-        if (event & ANY_EVENT)
-        {
+                ssize_t sentBytes = stcp_network_send(sd, FIN_packet, sizeof(STCPHeader), NULL);
 
+                free(FIN_packet);
+
+                if (sentBytes > 0){
+                    ctx->connection_state = FIN_SENT;
+                    wait_for_ACK(sd, ctx);
+                    continue;
+                }
+
+                free(FIN_packet);
+                free(ctx);
+                errno = ECONNREFUSED;
+                break;
+            }
         }
         /* etc. */
     }
 }
 
+bool sendACK(mysocket_t sd, context_t* ctx)
+{
+
+    // Create ACK Packet
+    packet* ACK_packet = createACK(ctx->sequence_num, ctx->rec_sequence_num + 1);
+
+    // Send ACK
+    ssize_t sentBytes = stcp_network_send(sd, ACK_packet, sizeof(STCPHeader), NULL);
+
+    free(ACK_packet);
+
+    if (sentBytes > 0)
+    {
+        return false;
+    }
+
+    free(ctx);
+    errno = ECONNREFUSED;
+    return true;
+
+}
+
+packet* createACK(unsigned int seq, unsigned int ack)
+{
+    packet* ACK = (STCPHeader*)malloc(sizeof(STCPHeader));
+    ACK->hdr.th_flags = TH_ACK;
+    ACK->hdr.th_seq = htonl(seq);
+    ACK->hdr.th_ack = htonl(ack);
+    ACK->hdr.th_off = htons(5);
+    ACK->hdr.th_win = htons(WINDOWLENGTH);
+    return ACK;
+}
+
+void wait_for_ACK(mysocket_t sd, context_t* ctx)
+{
+    char buffer[sizeof(STCPHeader)];
+
+    unsigned int event = stcp_wait_for_event(sd, NETWORK_DATA, NULL);
+
+    ssize_t receivedBytes = stcp_network_recv(sd, buffer, SIZE);
+
+    if (receivedBytes < sizeof(STCPHeader))
+    {
+        free(ctx);
+        errno = ECONNREFUSED;
+        return;
+    }
+
+    STCPHeader* receivedPacket = (STCPHeader*)buffer;
+
+    if (receivedPacket->th_flags == TH_ACK)
+    {
+        ctx->rec_sequence_num = ntohl(receivedPacket->th_seq);
+        ctx->rec_window_size = ntohs(receivedPacket->th_win) > 0 ? ntohs(receivedPacket->th_win) : 1;
+        if (ctx->connection_state == FIN_SENT)
+        {
+            ctx->connection_state = CSTATE_CLOSED;
+        }
+    }
+}
+
+packet* createFIN(unsigned int seq, unsigned int ack)
+{
+    packet* FIN = (STCPHeader*)malloc(sizeof(STCPHeader));
+    FIN->hdr.th_flags = TH_FIN;
+    FIN->hdr.th_seq = htonl(seq);
+    FIN->hdr.th_ack = htonl(ack);
+    FIN->hdr.th_off = htons(5);
+    FIN->hdr.th_win = htons(WINDOWLENGTH);
+    return FIN;
+}
 
 
 /**********************************************************************/
