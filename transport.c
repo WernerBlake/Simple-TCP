@@ -238,7 +238,6 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         if (event & APP_DATA)
         {
            printf("control_loop: APP_DATA\n");
-
             if (ctx->connection_state != CSTATE_ESTABLISHED){
                 printf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
                 continue;
@@ -246,38 +245,56 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 
             packet *send_segment;
             send_segment=(packet*)malloc(sizeof(packet));
+            size_t data_length = stcp_app_recv(sd, (void *)send_segment->buff, SIZE-1);
+            printf("recieved data from app : %s \n", send_segment->buff);
+            printf("buffer data transfered : %d \n", data_length);
 
-            size_t data_length = stcp_app_recv(sd, send_segment->buff, SIZE-1);
-
-            if(data_length == 0){
-                free(ctx);
-                free(send_segment);
-                return;
-            }
-
-            send_segment->hdr.th_seq=ctx->sequence_num;
-            send_segment->hdr.th_win=htonl(WINDOWLENGTH);
-            send_segment->hdr.th_off=5;
+            send_segment->hdr.th_seq = ctx->sequence_num;
+            send_segment->hdr.th_win = htonl(WINDOWLENGTH);
+            send_segment->hdr.th_off = 5;
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
-            ctx->initial_sequence_num+=strlen(send_segment->buff);
-            free(send_segment);
+            ctx->sequence_num++;
+            //Keep recieving data from application until no more
+            while ((int) data_length > SIZE-1)
+            {
+              data_length = stcp_app_recv(sd, (void *)send_segment->buff, SIZE-1);
+              printf("recieved data from app : %s \n", send_segment->buff);
+              printf("buffer data transfered : %d \n", data_length);
 
-            wait_for_ACK(sd, ctx);
-
+              send_segment->hdr.th_seq=ctx->sequence_num;
+              send_segment->hdr.th_win=htonl(WINDOWLENGTH);
+              send_segment->hdr.th_off=5;
+              stcp_network_send(sd, (void *)send_segment, sizeof(packet), NULL);
+              printf("Sent packet with seq: %i \n", (int)send_segment->hdr.th_seq);
+              //ctx->initial_sequence_num+=strlen(send_segment->buff);
+              ctx->sequence_num++;
+              wait_for_ACK(sd, ctx);
+            }
+            printf("done transfering data \n");
+            send_segment->hdr.th_seq = ctx->sequence_num;
+            send_segment->hdr.th_flags = TH_FIN;
+            stcp_network_send(sd, send_segment, sizeof(packet), NULL);
+            printf("Sent TH_FIN flag\n");
+            ctx->done = true;
             /* the application has requested that data be sent */
             /* see stcp_app_recv() */
+            free(send_segment);
         }
         if (event & NETWORK_DATA)
         {
             printf("control loop: NETWORK_DATA\n");
             char payload[SIZE];
+
             packet* pack;
+            packet* send_pack;
             pack = (packet *) calloc(1, sizeof(packet));
-            ssize_t network_bytes = stcp_network_recv(sd, pack, sizeof(packet));
+            ssize_t network_bytes = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+
             printf("pack seq : %i \n", pack->hdr.th_seq);
             if (network_bytes < sizeof(STCPHeader))
             {
-                free(ctx);
+                free(pack);
+                ctx->done = true;
                 continue;
             }
 
@@ -290,6 +307,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 sendACK(sd, ctx);
                 stcp_fin_received(sd);
                 ctx->connection_state = CSTATE_CLOSED;
+                ctx->done = true;
                 continue;
             }
 
@@ -319,9 +337,8 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 }
 
                 free(FIN_packet);
-                free(ctx);
                 errno = ECONNREFUSED;
-                break;
+                ctx->done = true;
             }
         }
         /* etc. */
