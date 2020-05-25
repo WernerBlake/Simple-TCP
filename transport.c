@@ -222,7 +222,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         // I'm going to kms this project omg
         if (event & APP_DATA)
         {
-            our_dprintf("control_loop: APP_DATA\n")
+            our_dprintf("control_loop: APP_DATA\n");
             
             if (ctx->connection_state != CSTATE_ESTABLISHED){
                 our_dprintf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
