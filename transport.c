@@ -218,14 +218,15 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 our_dprintf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
                 continue;
             }
-            
+
             packet *send_segment;
             send_segment=(packet*)malloc(sizeof(packet));
 
-            data_length = stcp_app_recv(sd, send_segment->buff, MSS-1);
+            data_length = stcp_app_recv(sd, send_segment->buff, SIZE-1);
                         
             if(data_length == 0){
                 free(ctx);
+                free(send_segment);
                 return;
             }
 
@@ -235,6 +236,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
             ctx->initial_sequence_num+=strlen(send_segment->data);
             free(send_segment);
+            
 
             
             /* the application has requested that data be sent */
@@ -257,6 +259,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         /* etc. */
     }
 }
+
 
 
 /**********************************************************************/
