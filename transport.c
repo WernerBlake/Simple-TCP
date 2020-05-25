@@ -255,8 +255,8 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 return;
             }
 
-            send_segment->hdr.th_seq=htonl(ctx->initial_sequence_num);
-            send_segment->hdr.th_win=htons(WINDOWLENGTH);
+            send_segment->hdr.th_seq=ctx->sequence_num;
+            send_segment->hdr.th_win=htonl(WINDOWLENGTH);
             send_segment->hdr.th_off=5;
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
             ctx->initial_sequence_num+=strlen(send_segment->buff);
@@ -269,10 +269,12 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         }
         if (event & NETWORK_DATA)
         {
-            printf("control loop: NETWORK_DATA");
+            printf("control loop: NETWORK_DATA\n");
             char payload[SIZE];
-
-            ssize_t network_bytes = stcp_network_recv(sd, payload, sizeof(STCPHeader));
+            packet* pack;
+            pack = (packet *) calloc(1, sizeof(packet));
+            ssize_t network_bytes = stcp_network_recv(sd, pack, sizeof(packet));
+            printf("pack seq : %i \n", pack->hdr.th_seq);
             if (network_bytes < sizeof(STCPHeader))
             {
                 free(ctx);
