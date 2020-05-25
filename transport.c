@@ -194,6 +194,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
      /* do any cleanup here */
      free(ctx);
      free(pack);
+     printf("---------------------CLOSED-------------------"\n", );
  }
 
 
@@ -242,7 +243,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 printf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
                 continue;
             }
-
+            //Sends data from app
             packet *send_segment;
             send_segment=(packet*)malloc(sizeof(packet));
             size_t data_length = stcp_app_recv(sd, (void *)send_segment->buff, SIZE-1);
@@ -255,7 +256,8 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
             printf("Sent packet with seq: %i \n", (int)send_segment->hdr.th_seq);
             ctx->sequence_num++;
-            //Keep recieving data from application until no more
+            wait_for_ACK(sd, ctx);
+            //Keep recieving data from application and sending it until no more
             while ((int) data_length > SIZE-1)
             {
               data_length = stcp_app_recv(sd, (void *)send_segment->buff, SIZE-1);
@@ -271,16 +273,20 @@ static void control_loop(mysocket_t sd, context_t *ctx)
               ctx->sequence_num++;
               wait_for_ACK(sd, ctx);
             }
+            //finished transfering data now we gotta send a FIN packet
             printf("done transfering data \n");
             send_segment->hdr.th_seq = ctx->sequence_num;
             send_segment->hdr.th_flags = TH_FIN;
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
             printf("Sent packet with seq: %i \n", (int)send_segment->hdr.th_seq);
             printf("Sent TH_FIN flag\n");
+            // wait for server to acknowledge our FIN then begin closing
+            wait_for_ACK(sd, ctx);
             ctx->done = true;
             /* the application has requested that data be sent */
             /* see stcp_app_recv() */
             free(send_segment);
+            printf("CLOSING!\n");
         }
         if (event & NETWORK_DATA)
         {
@@ -296,11 +302,25 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             printf("recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
             if (pack->hdr.th_flags == TH_FIN){
               printf("FIN recieved closing!\n");
+
+              send_pack->hdr.th_seq = ctx->sequence_num;
+              send_pack->hdr.th_flags = TH_ACK;
+              send_pack->hdr.th_ack = pack->hdr.th_seq + 1;
+              stcp_network_send(sd, (void *) send_pack, sizeof(packet), NULL);
+              ctx->sequence_num++;
+               //send FIN
+              send_pack->hdr.th_seq = ctx->sequence_num;
+              send_pack->hdr.th_flags = TH_FIN;
+              stcp_network_send(sd, send_pack, sizeof(packet), NULL);
+              ctx->sequence_num++;
+              //wait for ACK
+              wait_for_ACK(sd, ctx);
+              //We are done and can close
               ctx->done = true;
               free(pack);
               free(send_pack);
-              break;
             }
+            
             else{
 
               printf("data in packet: %s \n", pack->buff);
