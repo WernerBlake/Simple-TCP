@@ -253,6 +253,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             send_segment->hdr.th_win = htonl(WINDOWLENGTH);
             send_segment->hdr.th_off = 5;
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
+            printf("Sent packet with seq: %i \n", (int)send_segment->hdr.th_seq);
             ctx->sequence_num++;
             //Keep recieving data from application until no more
             while ((int) data_length > SIZE-1)
@@ -274,6 +275,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             send_segment->hdr.th_seq = ctx->sequence_num;
             send_segment->hdr.th_flags = TH_FIN;
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
+            printf("Sent packet with seq: %i \n", (int)send_segment->hdr.th_seq);
             printf("Sent TH_FIN flag\n");
             ctx->done = true;
             /* the application has requested that data be sent */
@@ -288,8 +290,29 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             packet* pack;
             packet* send_pack;
             pack = (packet *) calloc(1, sizeof(packet));
-            ssize_t network_bytes = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+            send_pack = (packet *) calloc(1, sizeof(packet));
 
+            ssize_t network_bytes = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+            printf("recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
+            if (pack->hdr.th_flags == TH_FIN){
+              printf("FIN recieved closing!\n");
+              ctx->done = true;
+              free(pack);
+              free(send_pack);
+              break;
+            }
+            else{
+
+              printf("data in packet: %s \n", pack->buff);
+              stcp_app_send(sd, (void *) pack->buff, SIZE);
+              send_pack->hdr.th_seq = ctx->sequence_num;
+              send_pack->hdr.th_flags = TH_ACK;
+              send_pack->hdr.th_ack = pack->hdr.th_seq + 1;
+              stcp_network_send(sd, (void *) send_pack, sizeof(packet), NULL);
+              ctx->sequence_num++;
+              printf("sending ACK: %d \n", send_pack->hdr.th_ack);
+            }
+            /*
             printf("pack seq : %i \n", pack->hdr.th_seq);
             if (network_bytes < sizeof(STCPHeader))
             {
@@ -315,7 +338,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             {
                 stcp_app_send(sd, payload + sizeof(STCPHeader), network_bytes - sizeof(STCPHeader));
                 sendACK(sd, ctx);
-            }
+            }*/
         }
 
         if (event & APP_CLOSE_REQUESTED)
