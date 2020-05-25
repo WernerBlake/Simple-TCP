@@ -34,7 +34,7 @@ typedef struct
     int connection_state;   /* state of the connection (established, etc.) */
     tcp_seq initial_sequence_num;
 
-    unsigned int sequence_num;      // next sequence number to send
+    tcp_seq sequence_num;      // next sequence number to send
     unsigned int rec_sequence_num;  // next wanted sequence number
     unsigned int rec_window_size;
     /* any other connection-wide global variables go here */
@@ -69,7 +69,6 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
      assert(ctx);
 
      generate_initial_seq_num(ctx);
-
      pack = (packet *) calloc(1, sizeof(packet));
      assert(pack);
      /* XXX: you should send a SYN packet here if is_active, or wait for one
@@ -80,13 +79,16 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
       * ECONNREFUSED, etc.) before calling the function.
       */
       printf("establishing connection\n");
+      ctx->sequence_num = ctx->initial_sequence_num;
       if(is_active){
-        printf("is active, building and sending SYN\n");
+        printf("___is active___\n");
         //build SYN packet and send it
         pack->hdr.th_seq = ctx->initial_sequence_num;
         pack->hdr.th_ack = NULL;
         pack->hdr.th_flags = TH_SYN;
         pack->hdr.th_win = htonl(WINDOWLENGTH);
+        printf("Sent packet with seq: %i \n", (int)pack->hdr.th_seq);
+        printf("Sent packet with ack: %i \n", (int)pack->hdr.th_ack);
         ssize_t sent = stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
         if (sent < 0){
           free(ctx);
@@ -117,11 +119,14 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
         printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
         printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
         //build acknowledgement packet and send it
-        pack->hdr.th_seq = pack->hdr.th_seq;
+        ctx->sequence_num++;
         pack->hdr.th_ack = pack->hdr.th_seq + 1;
+        pack->hdr.th_seq = ctx->sequence_num;
         pack->hdr.th_flags = TH_ACK;
         pack->hdr.th_win = htonl(WINDOWLENGTH);
         sent = stcp_network_send(sd, (void *) pack, sizeof(packet),NULL);
+        printf("Sent packet with seq: %i \n", (int)pack->hdr.th_seq);
+        printf("Sent packet with ack: %i \n", (int)pack->hdr.th_ack);
         ctx->connection_state = ACK_SEND;
         if (sent < 0)
         {
@@ -133,7 +138,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
       //not active and must listen
       else
       {
-        printf("Listening\n");
+        printf("___Listening___\n");
         ctx->connection_state = LISTEN;
         event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
         if (event == APP_CLOSE_REQUESTED)
@@ -144,14 +149,19 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
         }
         stcp_network_recv(sd, (void *) pack, sizeof(packet));
         ctx->connection_state = SYN_RECV;
-
+        printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
+        printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
         if(pack->hdr.th_flags == TH_SYN)
         {
+          printf("SYN flag Recieved \n");
           pack->hdr.th_ack = pack->hdr.th_seq + 1;
           pack->hdr.th_seq = ctx->initial_sequence_num;
           pack->hdr.th_flags = TH_ACK|TH_SYN;
           pack->hdr.th_win = htonl(WINDOWLENGTH);
+          printf("Sent packet with seq: %i \n", (int)pack->hdr.th_seq);
+          printf("Sent packet with ack: %i \n", (int)pack->hdr.th_ack);
           stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
+          ctx->sequence_num++;
           ctx->connection_state = ACK_SEND;
 
           //wait for response
@@ -163,6 +173,8 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
             return;
           }
           ssize_t recv = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+          printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
+          printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
           ctx->connection_state = ACK_RECV;
           if((unsigned int) recv < sizeof(packet))
           {
@@ -211,15 +223,16 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 {
     assert(ctx);
     assert(!ctx->done);
-
+    printf("control loop \n" );
     while (!ctx->done)
     {
 
         unsigned int event;
-
+        printf("Waiting for event\n");
         /* see stcp_api.h or stcp_api.c for details of this function */
         /* XXX: you will need to change some of these arguments! */
         event = stcp_wait_for_event(sd, 0, NULL);
+        printf("recieved event: %s\n", event);
         /* check whether it was the network, app, or a close request */
         // I'm going to kms this project omg
         if (event & APP_DATA)
