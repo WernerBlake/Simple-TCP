@@ -184,6 +184,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
           }
         }
       }
+      printf("-----------------------------------------------\n");
       printf("Connection established, entering control loop\n");
      ctx->connection_state = CSTATE_ESTABLISHED;
      stcp_unblock_application(sd);
@@ -223,7 +224,6 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 {
     assert(ctx);
     assert(!ctx->done);
-    printf("control loop \n" );
     while (!ctx->done)
     {
 
@@ -231,8 +231,8 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         printf("Waiting for event\n");
         /* see stcp_api.h or stcp_api.c for details of this function */
         /* XXX: you will need to change some of these arguments! */
-        event = stcp_wait_for_event(sd, 0, NULL);
-        printf("recieved event: %s\n", event);
+        event = stcp_wait_for_event(sd, ANY_EVENT, NULL);
+        printf("recieved event: %i\n", event);
         /* check whether it was the network, app, or a close request */
         // I'm going to kms this project omg
         if (event & APP_DATA)
@@ -261,9 +261,9 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
             ctx->initial_sequence_num+=strlen(send_segment->buff);
             free(send_segment);
-            
+
             wait_for_ACK(sd, ctx);
-            
+
             /* the application has requested that data be sent */
             /* see stcp_app_recv() */
         }
@@ -272,7 +272,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             printf("control loop: NETWORK_DATA");
             char payload[SIZE];
 
-            ssize_t network_bytes = stcp_network_recv(sd, payload, SIZE);
+            ssize_t network_bytes = stcp_network_recv(sd, payload, sizeof(STCPHeader));
             if (network_bytes < sizeof(STCPHeader))
             {
                 free(ctx);
