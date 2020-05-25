@@ -95,7 +95,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
         }
 
         ctx->connection_state = SYN_SEND;
-  
+
         //wait for acknowledgement
         tcp_seq ack_expected = pack->hdr.th_seq+1;
         event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
@@ -115,7 +115,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
           return;
         }
         printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
-        printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_ack);
+        printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
         //build acknowledgement packet and send it
         pack->hdr.th_seq = pack->hdr.th_seq;
         pack->hdr.th_ack = pack->hdr.th_seq + 1;
@@ -213,7 +213,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
     assert(!ctx->done);
 
     while (!ctx->done)
-    {   
+    {
 
         unsigned int event;
 
@@ -225,7 +225,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         if (event & APP_DATA)
         {
            printf("control_loop: APP_DATA\n");
-            
+
             if (ctx->connection_state != CSTATE_ESTABLISHED){
                 printf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
                 continue;
@@ -235,7 +235,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             send_segment=(packet*)malloc(sizeof(packet));
 
             size_t data_length = stcp_app_recv(sd, send_segment->buff, SIZE-1);
-                        
+
             if(data_length == 0){
                 free(ctx);
                 free(send_segment);
