@@ -22,7 +22,6 @@
 #include "stcp_api.h"
 #include "transport.h"
 
-
 enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN, CSTATE_CLOSED, FIN_SENT, ACK_SEND, ACK_RECV };    /* you should have more states */
 const int SIZE = 536; //maximum segment size
 const long WINDOWLENGTH = 3072;
@@ -34,6 +33,7 @@ typedef struct
 
     int connection_state;   /* state of the connection (established, etc.) */
     tcp_seq initial_sequence_num;
+
     unsigned int sequence_num;      // next sequence number to send
     unsigned int rec_sequence_num;  // next wanted sequence number
     unsigned int rec_window_size;
@@ -48,6 +48,7 @@ typedef struct
 
 static void generate_initial_seq_num(context_t *ctx);
 static void control_loop(mysocket_t sd, context_t *ctx);
+
 bool sendACK(mysocket_t sd, context_t* ctx);
 packet* createACK(unsigned int seq, unsigned int ack);
 packet* createFIN(unsigned int seq, unsigned int ack);
@@ -92,7 +93,7 @@ packet* createFIN(unsigned int seq, unsigned int ack);
         }
 
         ctx->connection_state = SYN_SEND;
-
+  
         //wait for acknowledgement
         tcp_seq ack_expected = pack->hdr.th_seq+1;
         event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
@@ -210,16 +211,44 @@ static void control_loop(mysocket_t sd, context_t *ctx)
     assert(!ctx->done);
 
     while (!ctx->done)
-    {
+    {   
+
         unsigned int event;
 
         /* see stcp_api.h or stcp_api.c for details of this function */
         /* XXX: you will need to change some of these arguments! */
         event = stcp_wait_for_event(sd, 0, NULL);
-
         /* check whether it was the network, app, or a close request */
+        // I'm going to kms this project omg
         if (event & APP_DATA)
         {
+            our_dprintf("control_loop: APP_DATA\n")
+            
+            if (ctx->connection_state != CSTATE_ESTABLISHED){
+                our_dprintf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
+                continue;
+            }
+
+            packet *send_segment;
+            send_segment=(packet*)malloc(sizeof(packet));
+
+            data_length = stcp_app_recv(sd, send_segment->buff, SIZE-1);
+                        
+            if(data_length == 0){
+                free(ctx);
+                free(send_segment);
+                return;
+            }
+
+            send_segment->hdr.th_seq=htonl(ctx->initial_sequence_num);
+            send_segment->hdr.th_win=htons(WINDOWLENGTH);
+            send_segment->th_off=5;
+            stcp_network_send(sd, send_segment, sizeof(packet), NULL);
+            ctx->initial_sequence_num+=strlen(send_segment->data);
+            free(send_segment);
+            
+
+            
             /* the application has requested that data be sent */
             /* see stcp_app_recv() */
         }
@@ -351,6 +380,7 @@ packet* createFIN(unsigned int seq, unsigned int ack)
     FIN->hdr.th_win = htons(WINDOWLENGTH);
     return FIN;
 }
+
 
 /**********************************************************************/
 /* our_dprintf
