@@ -22,7 +22,7 @@
 #include "stcp_api.h"
 #include "transport.h"
 
-enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN, CSTATE_CLOSED, FIN_SENT };    /* you should have more states */
+enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN, CSTATE_CLOSED, FIN_SENT, ACK_SEND, ACK_RECV };    /* you should have more states */
 const int SIZE = 536; //maximum segment size
 const long WINDOWLENGTH = 3072;
 
@@ -57,81 +57,129 @@ packet* createFIN(unsigned int seq, unsigned int ack);
  * any data from the peer or the application.  this function should not
  * return until the connection is closed.
  */
-void transport_init(mysocket_t sd, bool_t is_active)
-{
-    context_t *ctx;
-    packet *pack;
+ void transport_init(mysocket_t sd, bool_t is_active)
+ {
+     context_t *ctx;
+     packet *pack;
+     unsigned int event;
 
-    ctx = (context_t *) calloc(1, sizeof(context_t));
-    assert(ctx);
+     ctx = (context_t *) calloc(1, sizeof(context_t));
+     assert(ctx);
 
-    generate_initial_seq_num(ctx);
+     generate_initial_seq_num(ctx);
 
-    pack = (packet *) calloc(1, sizeof(packet));
-    assert(pack);
-    /* XXX: you should send a SYN packet here if is_active, or wait for one
-     * to arrive if !is_active.  after the handshake completes, unblock the
-     * application with stcp_unblock_application(sd).  you may also use
-     * this to communicate an error condition back to the application, e.g.
-     * if connection fails; to do so, just set errno appropriately (e.g. to
-     * ECONNREFUSED, etc.) before calling the function.
-     */
+     pack = (packet *) calloc(1, sizeof(packet));
+     assert(pack);
+     /* XXX: you should send a SYN packet here if is_active, or wait for one
+      * to arrive if !is_active.  after the handshake completes, unblock the
+      * application with stcp_unblock_application(sd).  you may also use
+      * this to communicate an error condition back to the application, e.g.
+      * if connection fails; to do so, just set errno appropriately (e.g. to
+      * ECONNREFUSED, etc.) before calling the function.
+      */
+      printf("establishing connection\n");
+      if(is_active){
+        printf("is active, building and sending SYN\n");
+        //build SYN packet and send it
+        pack->hdr.th_seq = ctx->initial_sequence_num;
+        pack->hdr.th_ack = NULL;
+        pack->hdr.th_flags = TH_SYN;
+        pack->hdr.th_win = htonl(WINDOWLENGTH);
+        ssize_t sent = stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
+        if (sent < 0){
+          free(ctx);
+          free(pack);
+          return;
+        }
 
-     if(is_active){
-       //build SYN packet and send it
+        ctx->connection_state = SYN_SEND;
+  
+        //wait for acknowledgement
+        tcp_seq ack_expected = pack->hdr.th_seq+1;
+        event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+        if (event == APP_CLOSE_REQUESTED)
+        {
+          free(ctx);
+          free(pack);
+          return;
+        }
 
-       pack->hdr.th_seq = ctx->initial_sequence_num;
-       //pack->hdr.th_ack = "\0";
-       pack->hdr.th_flags = TH_SYN;
-       pack->hdr.th_win = htons(WINDOWLENGTH);
-       stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
-       our_dprintf("sent\n")
-       ctx->connection_state = SYN_SEND;
+        //recieved acknowledgement
+        ssize_t recv = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+        ctx->connection_state = ACK_RECV;
+        if((unsigned int)recv < sizeof(packet)){
+          free(ctx);
+          free(pack);
+          return;
+        }
+        printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
+        printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_ack);
+        //build acknowledgement packet and send it
+        pack->hdr.th_seq = pack->hdr.th_seq;
+        pack->hdr.th_ack = pack->hdr.th_seq + 1;
+        pack->hdr.th_flags = TH_ACK;
+        pack->hdr.th_win = htonl(WINDOWLENGTH);
+        sent = stcp_network_send(sd, (void *) pack, sizeof(packet),NULL);
+        ctx->connection_state = ACK_SEND;
+        if (sent < 0)
+        {
+          free(ctx);
+          free(pack);
+          return;
+        }
+      }
+      //not active and must listen
+      else
+      {
+        printf("Listening\n");
+        ctx->connection_state = LISTEN;
+        event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+        if (event == APP_CLOSE_REQUESTED)
+        {
+          free(ctx);
+          free(pack);
+          return;
+        }
+        stcp_network_recv(sd, (void *) pack, sizeof(packet));
+        ctx->connection_state = SYN_RECV;
 
-       //wait for acknowledgement
-       tcp_seq ack_expected = pack->hdr.th_seq+1;
-       stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+        if(pack->hdr.th_flags == TH_SYN)
+        {
+          pack->hdr.th_ack = pack->hdr.th_seq + 1;
+          pack->hdr.th_seq = ctx->initial_sequence_num;
+          pack->hdr.th_flags = TH_ACK|TH_SYN;
+          pack->hdr.th_win = htonl(WINDOWLENGTH);
+          stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
+          ctx->connection_state = ACK_SEND;
 
-       //recieved acknowledgement
-       stcp_network_recv(sd, (void *) pack, sizeof(packet));
+          //wait for response
+          event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+          if (event == APP_CLOSE_REQUESTED)
+          {
+            free(ctx);
+            free(pack);
+            return;
+          }
+          ssize_t recv = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+          ctx->connection_state = ACK_RECV;
+          if((unsigned int) recv < sizeof(packet))
+          {
+            free(ctx);
+            free(pack);
+            return;
+          }
+        }
+      }
+      printf("Connection established, entering control loop\n");
+     ctx->connection_state = CSTATE_ESTABLISHED;
+     stcp_unblock_application(sd);
 
-       //build acknowledgement packet and send it
-       pack->hdr.th_seq = pack->hdr.th_seq;
-       pack->hdr.th_ack = pack->hdr.th_seq + 1;
-       pack->hdr.th_flags = TH_ACK;
-       pack->hdr.th_win = htonl(WINDOWLENGTH);
-       stcp_network_send(sd, (void *) pack, sizeof(packet),NULL);
-     }
-     //not active and must listen
-     else
-     {
-       ctx->connection_state = LISTEN;
-       stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+     control_loop(sd, ctx);
 
-       stcp_app_recv(sd, (void *) pack, sizeof(packet));
-       ctx->connection_state = SYN_RECV;
-
-       if(pack->hdr.th_flags & TH_SYN)
-       {
-         pack->hdr.th_ack = pack->hdr.th_seq + 1;
-         pack->hdr.th_seq = ctx->initial_sequence_num;
-         pack->hdr.th_flags = TH_ACK|TH_SYN;
-         pack->hdr.th_win = htonl(WINDOWLENGTH);
-         stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
-
-         //wait for response
-         stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
-         stcp_app_recv(sd, (void *) pack, sizeof(packet));
-       }
-     }
-    ctx->connection_state = CSTATE_ESTABLISHED;
-    stcp_unblock_application(sd);
-
-    control_loop(sd, ctx);
-
-    /* do any cleanup here */
-    free(ctx);
-}
+     /* do any cleanup here */
+     free(ctx);
+     free(pack);
+ }
 
 
 /* generate random initial sequence number for an STCP connection */
