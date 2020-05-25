@@ -249,13 +249,14 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             ctx->initial_sequence_num+=strlen(send_segment->buff);
             free(send_segment);
             
-
+            wait_for_ACK(sd, ctx);
             
             /* the application has requested that data be sent */
             /* see stcp_app_recv() */
         }
         if (event & NETWORK_DATA)
         {
+            printf("control loop: NETWORK_DATA");
             char payload[SIZE];
 
             ssize_t network_bytes = stcp_network_recv(sd, payload, SIZE);
@@ -286,6 +287,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 
         if (event & APP_CLOSE_REQUESTED)
         {
+            printf("control loop: APP_CLOSE_REQUESTED");
             if (ctx->connection_state == CSTATE_ESTABLISHED)
             {
                 packet* FIN_packet = createFIN(ctx->sequence_num, ctx->rec_sequence_num + 1);
