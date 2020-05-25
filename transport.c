@@ -52,6 +52,8 @@ static void control_loop(mysocket_t sd, context_t *ctx);
 bool sendACK(mysocket_t sd, context_t* ctx);
 packet* createACK(unsigned int seq, unsigned int ack);
 packet* createFIN(unsigned int seq, unsigned int ack);
+void wait_for_ACK(mysocket_t sd, context_t* ctx);
+
 
 /* initialise the transport layer, and start the main loop, handling
  * any data from the peer or the application.  this function should not
@@ -222,17 +224,17 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         // I'm going to kms this project omg
         if (event & APP_DATA)
         {
-            our_dprintf("control_loop: APP_DATA\n")
+           printf("control_loop: APP_DATA\n");
 
             if (ctx->connection_state != CSTATE_ESTABLISHED){
-                our_dprintf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
+                printf("APP_DATA: wrong connection state: %d\n", ctx->connection_state);
                 continue;
             }
 
             packet *send_segment;
             send_segment=(packet*)malloc(sizeof(packet));
 
-            data_length = stcp_app_recv(sd, send_segment->buff, SIZE-1);
+            size_t data_length = stcp_app_recv(sd, send_segment->buff, SIZE-1);
 
             if(data_length == 0){
                 free(ctx);
@@ -242,9 +244,9 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 
             send_segment->hdr.th_seq=htonl(ctx->initial_sequence_num);
             send_segment->hdr.th_win=htons(WINDOWLENGTH);
-            send_segment->th_off=5;
+            send_segment->hdr.th_off=5;
             stcp_network_send(sd, send_segment, sizeof(packet), NULL);
-            ctx->initial_sequence_num+=strlen(send_segment->data);
+            ctx->initial_sequence_num+=strlen(send_segment->buff);
             free(send_segment);
 
 
@@ -277,7 +279,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 
             if (network_bytes - sizeof(STCPHeader) != 0)
             {
-                stcp_app_sent(sd, payload + sizeof(STCPHeader), network_bytes - sizeof(STCPHeader));
+                stcp_app_send(sd, payload + sizeof(STCPHeader), network_bytes - sizeof(STCPHeader));
                 sendACK(sd, ctx);
             }
         }
@@ -333,7 +335,7 @@ bool sendACK(mysocket_t sd, context_t* ctx)
 
 packet* createACK(unsigned int seq, unsigned int ack)
 {
-    packet* ACK = (STCPHeader*)malloc(sizeof(STCPHeader));
+    packet* ACK = (packet*)malloc(sizeof(packet));
     ACK->hdr.th_flags = TH_ACK;
     ACK->hdr.th_seq = htonl(seq);
     ACK->hdr.th_ack = htonl(ack);
@@ -372,7 +374,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx)
 
 packet* createFIN(unsigned int seq, unsigned int ack)
 {
-    packet* FIN = (STCPHeader*)malloc(sizeof(STCPHeader));
+    packet* FIN = (packet*)malloc(sizeof(packet));
     FIN->hdr.th_flags = TH_FIN;
     FIN->hdr.th_seq = htonl(seq);
     FIN->hdr.th_ack = htonl(ack);
