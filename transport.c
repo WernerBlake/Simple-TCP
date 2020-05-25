@@ -182,7 +182,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
             if (network_bytes < sizeof(STCPHeader))
             {
                 free(ctx);
-                return;
+                continue;
             }
 
             STCPHeader* payloadHeader = (STCPHeader*)payload;
@@ -194,7 +194,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 sendACK(sd, ctx);
                 stcp_fin_received(sd);
                 ctx->connection_state = CSTATE_CLOSED;
-                return;
+                continue;
             }
 
             if (network_bytes - sizeof(STCPHeader) != 0)
@@ -218,13 +218,13 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 if (sentBytes > 0){
                     ctx->connection_state = FIN_SENT;
                     wait_for_ACK(sd, ctx);
-                    return true;
+                    continue;
                 }
 
                 free(FIN_packet);
                 free(ctx);
                 errno = ECONNREFUSED;
-                return false;
+                break;
             }
         }
         /* etc. */
