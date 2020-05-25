@@ -1,6 +1,24 @@
 ================================================
  README file for Project 3 - Simple TCP
-           Name(s): 
+           Name(s): Richard Charczenko, Blake Werner, Megan Gao
 ================================================
 
-DESCRIBE YOUR CODE AND DESIGN DECISIONS HERE
+================================================
+ CONTRIBUTIONS
+================================================
+Richard Charczenko ʕ/　·ᴥ·ʔ/
+- transport_init() functionality
+
+Blake Werner ૮ ･ ﻌ･ა
+- control loop() NETWORK_DATA and APP_CLOSE_REQUESTED event functionality
+
+Megan Gao /ᐠ｡ꞈ｡ᐟ✿\
+- control loop() APP_DATA event functionality
+
+All Members
+- debugging and testing
+
+================================================
+DESIGN DECISIONS
+================================================
+- implemented one buffer containing both STCPHeader and payload
