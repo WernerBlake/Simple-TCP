@@ -22,7 +22,17 @@
 #include "transport.h"
 
 
-enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN };    /* you should have more states */
+enum { CSTATE_ESTABLISHED, 
+       SYN_SEND, 
+       SYN_RECV, 
+       LISTEN
+       FIN_WAIT1
+       FIN_WAIT2
+       TIME_WAIT
+       LAST_ACK
+       CSTATE_CLOSED
+     }; 
+        /* you should have more states */
 const int SIZE = 536; //maximum segment size
 const long WINDOWLENGTH = 3072;
 /* this structure is global to a mysocket descriptor */
@@ -32,6 +42,9 @@ typedef struct
 
     int connection_state;   /* state of the connection (established, etc.) */
     tcp_seq initial_sequence_num;
+    cir_buffer recv_buffer;
+    cir_buffer send_buffer;
+
 
     /* any other connection-wide global variables go here */
 } context_t;
@@ -42,16 +55,43 @@ typedef struct
     char buff[SIZE];
 } packet;
 
+typedef struct
+{
+    char* buffer;
+    size_t head;
+    size_t tail;
+    size_t size;
+    size_t datasize;
+    size_t freesize;
+    
+}cir_buffer;
+
 static void generate_initial_seq_num(context_t *ctx);
 static void control_loop(mysocket_t sd, context_t *ctx);
-void randomNum(context_t* ctx);
 
-void randomNum(context_t *ctx)
-{
-    srand(time(0));
-    ctx->initial_sequence_num = rand() % 256;
+static void buffer_init(cir_buffer *buff, size_t initial_sequence_num){
+    buff->buffer = (char*)malloc(WINDOWLENGTH*sizeof(char));
+    buff->head = initial_sequence_num;
+    buff->tail = buff->head;
+    buff->size = WINDOWLENGTH;
+    buff->datasize = 0;
+    buff->freesize = WINDOWLENGTH;
 }
 
+static size_t write_buffer(cir_buffer *buff, char *data, size_t datasize){
+    size_t start = buff->head % buff->size;
+    if (datasize <= (buff->size - start))
+        memcpy(buf->buffer+start, data, datasize);
+    else{
+        size_t segment_size = buff->size - start;
+        memcpy(buff->buffer+start, data, segment_size);
+        memcpy(buff->buffer, data+segment_size, datasize-segment_size);
+    }
+    buff->head += datasize;
+    buff->freesize -= datasize;
+    buff->datasize += datasize;
+    return datasize;
+}
 /* initialise the transport layer, and start the main loop, handling
  * any data from the peer or the application.  this function should not
  * return until the connection is closed.
@@ -78,12 +118,12 @@ void transport_init(mysocket_t sd, bool_t is_active)
 
      if(is_active){
        //build SYN packet and send it
-       pack->hdr.th_seq = ctx->initial_sequence_num;
+       pack->hdr.th_seq = htonl(ctx->initial_sequence_num);
        pack->hdr.th_ack = NULL;
        pack->hdr.th_flags = TH_SYN;
-       pack->hdr.th_win = htonl(WINDOWLENGTH);
+       pack->hdr.th_win = htons(WINDOWLENGTH);
        stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
-
+       our_dprintf("sent\n")
        ctx->connection_state = SYN_SEND;
 
        //wait for acknowledgement
@@ -109,7 +149,7 @@ void transport_init(mysocket_t sd, bool_t is_active)
        stcp_app_recv(sd, (void *) pack, sizeof(packet));
        ctx->connection_state = SYN_RECV;
 
-       if(pack->hdr.flags & TH_SYN)
+       if(pack->hdr.th_flags & TH_SYN)
        {
          pack->hdr.th_ack = pack->hdr.th_seq + 1;
          pack->hdr.th_seq = ctx->initial_sequence_num;
@@ -161,16 +201,35 @@ static void control_loop(mysocket_t sd, context_t *ctx)
     assert(!ctx->done);
 
     while (!ctx->done)
-    {
+    {   
+
         unsigned int event;
 
         /* see stcp_api.h or stcp_api.c for details of this function */
         /* XXX: you will need to change some of these arguments! */
         event = stcp_wait_for_event(sd, 0, NULL);
-
         /* check whether it was the network, app, or a close request */
+        // I'm going to kms this project omg
         if (event & APP_DATA)
         {
+            packet *send_segment;
+            send_segment=(packet*)malloc(sizeof(packet));
+
+            data_length = stcp_app_recv(sd, send_segment->buff, MSS-1);
+                        
+            if(data_length == 0){
+                free(ctx);
+                return;
+            }
+
+            send_segment->hdr.th_seq=htonl(ctx->initial_sequence_num);
+            send_segment->hdr.th_win=htons(WINDOWLENGTH);
+            send_segment->th_off=5;
+            stcp_network_send(sd, send_segment, sizeof(packet), NULL);
+            ctx->initial_sequence_num+=strlen(send_segment->data);
+            free(send_segment);
+
+            
             /* the application has requested that data be sent */
             /* see stcp_app_recv() */
         }
