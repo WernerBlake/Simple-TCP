@@ -83,4 +83,7 @@
     <None Include="..\..\Makefile" />
     <None Include="..\..\README" />
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="..\..\test.txt" />
+  </ItemGroup>
 </Project>

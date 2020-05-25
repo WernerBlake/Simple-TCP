@@ -17,14 +17,16 @@
 #include <assert.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <stdbool.h>
 #include "mysock.h"
 #include "stcp_api.h"
 #include "transport.h"
 
 
-enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN };    /* you should have more states */
+enum { CSTATE_ESTABLISHED, SYN_SEND, SYN_RECV, LISTEN, CSTATE_CLOSED };    /* you should have more states */
 const int SIZE = 536; //maximum segment size
 const long WINDOWLENGTH = 3072;
+
 /* this structure is global to a mysocket descriptor */
 typedef struct
 {
@@ -32,7 +34,9 @@ typedef struct
 
     int connection_state;   /* state of the connection (established, etc.) */
     tcp_seq initial_sequence_num;
-
+    unsigned int next_sequence_num;      // next sequence number to send
+    unsigned int rec_sequence_num;  // next wanted sequence number
+    unsigned int rec_window_size;
     /* any other connection-wide global variables go here */
 } context_t;
 
@@ -44,13 +48,8 @@ typedef struct
 
 static void generate_initial_seq_num(context_t *ctx);
 static void control_loop(mysocket_t sd, context_t *ctx);
-void randomNum(context_t* ctx);
-
-void randomNum(context_t *ctx)
-{
-    srand(time(0));
-    ctx->initial_sequence_num = rand() % 256;
-}
+bool sendACK(mysocket_t sd, context_t* ctx);
+STCPHeader* createACK(unsigned int seq, unsigned int ack);
 
 /* initialise the transport layer, and start the main loop, handling
  * any data from the peer or the application.  this function should not
@@ -79,7 +78,7 @@ void transport_init(mysocket_t sd, bool_t is_active)
      if(is_active){
        //build SYN packet and send it
        pack->hdr.th_seq = ctx->initial_sequence_num;
-       pack->hdr.th_ack = NULL;
+       //pack->hdr.th_ack = "\0";
        pack->hdr.th_flags = TH_SYN;
        pack->hdr.th_win = htonl(WINDOWLENGTH);
        stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
@@ -109,7 +108,7 @@ void transport_init(mysocket_t sd, bool_t is_active)
        stcp_app_recv(sd, (void *) pack, sizeof(packet));
        ctx->connection_state = SYN_RECV;
 
-       if(pack->hdr.flags & TH_SYN)
+       if(pack->hdr.th_flags & TH_SYN)
        {
          pack->hdr.th_ack = pack->hdr.th_seq + 1;
          pack->hdr.th_seq = ctx->initial_sequence_num;
@@ -176,15 +175,35 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         }
         if (event & NETWORK_DATA)
         {
+            char payload[SIZE];
 
+            ssize_t network_bytes = stcp_network_recv(sd, payload, SIZE);
+            if (network_bytes < sizeof(STCPHeader))
+            {
+                free(ctx);
+                return;
+            }
+
+            STCPHeader* payloadHeader = (STCPHeader*)payload;
+            ctx->rec_sequence_num = ntohl(payloadHeader->th_seq);
+            ctx->rec_window_size = ntohs(payloadHeader->th_win);
+
+            if (payloadHeader->th_flags == TH_FIN)
+            {
+                sendACK(sd, ctx);
+                stcp_fin_received(sd);
+                ctx->connection_state = CSTATE_CLOSED;
+                return;
+            }
+
+            if (network_bytes - sizeof(STCPHeader))
+            {
+                stcp_app_sent(sd, payload + sizeof(STCPHeader), network_bytes - sizeof(STCPHeader));
+                sendACK(sd, ctx);
+            }
         }
 
         if (event & APP_CLOSE_REQUESTED)
-        {
-
-        }
-    end:
-        if (event & ANY_EVENT)
         {
 
         }
@@ -192,7 +211,43 @@ static void control_loop(mysocket_t sd, context_t *ctx)
     }
 }
 
+bool sendACK(mysocket_t sd, context_t* ctx)
+{
+    // printf("Sending ACK\n");
+    // Create ACK Packet
+    STCPHeader* ACK_packet =
+        createACK(ctx->next_sequence_num, ctx->rec_sequence_num + 1);
 
+    // Send ACK packet
+    ssize_t sentBytes =
+        stcp_network_send(sd, ACK_packet, sizeof(STCPHeader), NULL);
+
+    // Verify sending of ACK packet
+    if (sentBytes > 0)
+    {  // If ACK packet suucessfully sent
+        free(ACK_packet);
+        return true;
+    }
+    else
+    {
+        free(ACK_packet);
+        free(ctx);
+        // stcp_unblock_application(sd);
+        errno = ECONNREFUSED;  // TODO
+        return false;
+    }
+}
+
+STCPHeader* createACK(unsigned int seq, unsigned int ack)
+{
+    STCPHeader* ACK = (STCPHeader*)malloc(sizeof(STCPHeader));
+    ACK->th_flags = TH_ACK;
+    ACK->th_seq = htonl(seq);
+    ACK->th_ack = htonl(ack);
+    ACK->th_off = htons(5);
+    ACK->th_win = htons(WINDOWLENGTH);
+    return ACK;
+}
 /**********************************************************************/
 /* our_dprintf
  *
