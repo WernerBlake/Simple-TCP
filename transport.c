@@ -213,7 +213,7 @@ static void generate_initial_seq_num(context_t *ctx)
 #endif
 }
 
-
+ 
 /* control_loop() is the main STCP loop; it repeatedly waits for one of the
  * following to happen:
  *   - incoming data from the peer
