@@ -404,7 +404,7 @@ bool sendACK(mysocket_t sd, context_t* ctx)
         return false;
     }
 
-    free(ctx);
+    //free(ctx);
     errno = ECONNREFUSED;
     return true;
 
@@ -431,7 +431,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx)
 
     if (receivedBytes < sizeof(STCPHeader))
     {
-        free(ctx);
+        //free(ctx);
         errno = ECONNREFUSED;
         return;
     }
