@@ -82,11 +82,12 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
       ctx->sequence_num = ctx->initial_sequence_num;
       if(is_active){
         printf("___is active___\n");
+        ctx->sequence_num = 1;
         //build SYN packet and send it
-        pack->hdr.th_seq = ctx->initial_sequence_num;
-        pack->hdr.th_ack = NULL;
+        pack->hdr.th_seq = htonl(ctx->initial_sequence_num);
         pack->hdr.th_flags = TH_SYN;
         pack->hdr.th_win = htonl(WINDOWLENGTH);
+        pack->hdr.th_off = 5;
         printf("Sent packet with seq: %i \n", (int)pack->hdr.th_seq);
         printf("Sent packet with ack: %i \n", (int)pack->hdr.th_ack);
         ssize_t sent = stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
@@ -116,14 +117,22 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
           free(pack);
           return;
         }
-        printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
-        printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
+        printf("Recieved packet with seq: %i \n", (int)ntohl(pack->hdr.th_seq));
+        printf("Recieved packet with ack: %i \n", (int)ntolh(pack->hdr.th_ack));
+
+        if(ntohl(pack->hdr.th_ack) != ack_expected){
+          printf("Unexpected acknowledgement, closing down")
+          free(ctx);
+          free(pack);
+          return;
+        }
         //build acknowledgement packet and send it
         ctx->sequence_num++;
-        pack->hdr.th_ack = pack->hdr.th_seq + 1;
-        pack->hdr.th_seq = ctx->sequence_num;
+        pack->hdr.th_ack = htonl(ntohl(pack->hdr.th_seq) + 1);
+        pack->hdr.th_seq = htonl(ctx->sequence_num);
         pack->hdr.th_flags = TH_ACK;
         pack->hdr.th_win = htonl(WINDOWLENGTH);
+        pack->hdr.th_off = 5;
         sent = stcp_network_send(sd, (void *) pack, sizeof(packet),NULL);
         printf("Sent packet with seq: %i \n", (int)pack->hdr.th_seq);
         printf("Sent packet with ack: %i \n", (int)pack->hdr.th_ack);
@@ -147,40 +156,44 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
           free(pack);
           return;
         }
-        stcp_network_recv(sd, (void *) pack, sizeof(packet));
-        ctx->connection_state = SYN_RECV;
-        printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
-        printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
-        if(pack->hdr.th_flags == TH_SYN)
+        if(event & NETWORK_DATA)
         {
-          printf("SYN flag Recieved \n");
-          pack->hdr.th_ack = pack->hdr.th_seq + 1;
-          pack->hdr.th_seq = ctx->initial_sequence_num;
-          pack->hdr.th_flags = TH_ACK|TH_SYN;
-          pack->hdr.th_win = htonl(WINDOWLENGTH);
-          printf("Sent packet with seq: %i \n", (int)pack->hdr.th_seq);
-          printf("Sent packet with ack: %i \n", (int)pack->hdr.th_ack);
-          stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
-          ctx->sequence_num++;
-          ctx->connection_state = ACK_SEND;
-
-          //wait for response
-          event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
-          if (event == APP_CLOSE_REQUESTED)
-          {
-            free(ctx);
-            free(pack);
-            return;
-          }
-          ssize_t recv = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+          stcp_network_recv(sd, (void *) pack, sizeof(packet));
           printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
           printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
-          ctx->connection_state = ACK_RECV;
-          if((unsigned int) recv < sizeof(packet))
+          if(pack->hdr.th_flags == TH_SYN)
           {
-            free(ctx);
-            free(pack);
-            return;
+            ctx->connection_state = SYN_RECV;
+            printf("SYN flag Recieved \n");
+            pack->hdr.th_ack = htonl(ntohl(pack->hdr.th_seq) + 1);
+            pack->hdr.th_seq = htonl(ctx->initial_sequence_num);
+            pack->hdr.th_flags = TH_ACK|TH_SYN;
+            pack->hdr.th_win = htonl(WINDOWLENGTH);
+            pack->hdr.th_off = 5;
+            printf("Sent packet with seq: %i \n", (int)pack->hdr.th_seq);
+            printf("Sent packet with ack: %i \n", (int)pack->hdr.th_ack);
+            stcp_network_send(sd, (void *) pack, sizeof(packet), NULL);
+            ctx->sequence_num++;
+            ctx->connection_state = ACK_SEND;
+
+            //wait for response
+            event = stcp_wait_for_event(sd, NETWORK_DATA|APP_CLOSE_REQUESTED, NULL);
+            if (event == APP_CLOSE_REQUESTED)
+            {
+              free(ctx);
+              free(pack);
+              return;
+            }
+            ssize_t recv = stcp_network_recv(sd, (void *) pack, sizeof(packet));
+            printf("Recieved packet with seq: %i \n", (int)pack->hdr.th_seq);
+            printf("Recieved packet with ack: %i \n", (int)pack->hdr.th_ack);
+            ctx->connection_state = ACK_RECV;
+            if((unsigned int) recv < sizeof(packet))
+            {
+              free(ctx);
+              free(pack);
+              return;
+            }
           }
         }
       }
@@ -320,9 +333,9 @@ static void control_loop(mysocket_t sd, context_t *ctx)
               free(pack);
               free(send_pack);
             }
-            
-            else{
 
+            else{
+              //recieved data from server
               printf("data in packet: %s \n", pack->buff);
               stcp_app_send(sd, (void *) pack->buff, SIZE);
               send_pack->hdr.th_seq = ctx->sequence_num;
