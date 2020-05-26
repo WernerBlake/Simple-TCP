@@ -207,7 +207,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
      /* do any cleanup here */
      free(ctx);
      free(pack);
-     printf("---------------------CLOSED-------------------"\n", );
+     printf("---------------------CLOSED-------------------\n");
  }
 
 
@@ -226,7 +226,7 @@ static void generate_initial_seq_num(context_t *ctx)
 #endif
 }
 
-
+ 
 /* control_loop() is the main STCP loop; it repeatedly waits for one of the
  * following to happen:
  *   - incoming data from the peer
@@ -417,7 +417,7 @@ bool sendACK(mysocket_t sd, context_t* ctx)
         return false;
     }
 
-    free(ctx);
+    //free(ctx);
     errno = ECONNREFUSED;
     return true;
 
@@ -436,30 +436,38 @@ packet* createACK(unsigned int seq, unsigned int ack)
 
 void wait_for_ACK(mysocket_t sd, context_t* ctx)
 {
+    printf("waiting for ACK \n");
     char buffer[sizeof(STCPHeader)];
 
     unsigned int event = stcp_wait_for_event(sd, NETWORK_DATA, NULL);
 
     ssize_t receivedBytes = stcp_network_recv(sd, buffer, SIZE);
 
+    printf("if 1 \n");
     if (receivedBytes < sizeof(STCPHeader))
     {
-        free(ctx);
+        //free(ctx);
         errno = ECONNREFUSED;
         return;
     }
 
+    printf("if 1 end \n");
     STCPHeader* receivedPacket = (STCPHeader*)buffer;
 
+    printf("if 2 \n");
     if (receivedPacket->th_flags == TH_ACK)
     {
         ctx->rec_sequence_num = ntohl(receivedPacket->th_seq);
         ctx->rec_window_size = ntohs(receivedPacket->th_win) > 0 ? ntohs(receivedPacket->th_win) : 1;
+
+        printf("if 3 \n");
         if (ctx->connection_state == FIN_SENT)
         {
             ctx->connection_state = CSTATE_CLOSED;
         }
     }
+    printf("end of wait \n");
+
 }
 
 packet* createFIN(unsigned int seq, unsigned int ack)
