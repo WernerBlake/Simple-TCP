@@ -194,7 +194,7 @@ void wait_for_ACK(mysocket_t sd, context_t* ctx);
      /* do any cleanup here */
      free(ctx);
      free(pack);
-     printf("---------------------CLOSED-------------------"\n", );
+     printf("---------------------CLOSED-------------------\n", );
  }
 
 
